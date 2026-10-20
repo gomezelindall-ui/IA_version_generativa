@@ -1,0 +1,6 @@
+# OPCIONAL: generación de imágenes con IA local (sin internet, requiere buena CPU/GPU)
+-r requirements.txt
+torch
+diffusers
+transformers
+accelerate

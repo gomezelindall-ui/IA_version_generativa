@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Secretos
+.env
+*.key
+
+# Archivos generados por ELIN
+imagenes_elin/
+audios_elin/
+
+# Caché de modelos de IA local
+.cache/
+huggingface/
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
