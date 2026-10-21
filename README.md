@@ -4,9 +4,14 @@ Aplicación de escritorio en **Python + Pygame** con un entorno limpio y centrad
 conversar, **crear imágenes**, **buscar imágenes en internet** y **generar/buscar audio**.
 Cada imagen indica dónde se creó o se buscó y si usó aprendizaje automático o solo Python.
 
+![ELIN](docs/captura.png)
+
 ## Características
 
-- Interfaz clara y centrada, con presentación inicial y barra de carga.
+- Interfaz compacta y centrada: barra superior con selector de modo (Conversar · Crear · Buscar),
+  menús desplegables para motor, estilo, formato y fuentes, y un cuadro de texto de una sola línea que crece al escribir.
+- Presentación inicial con barra de carga.
+- Sugerencias de inicio y descripciones emergentes (tooltips) en los botones de solo icono.
 - Minimizar / maximizar (también con `F11`).
 - Chat con respuestas de IA (Pollinations, o un modelo local con Ollama).
 - Creación de imágenes con varios proveedores y respaldo automático:
@@ -95,6 +100,7 @@ elin/
 ├── requirements-local.txt  # dependencias opcionales (IA local)
 ├── .env.example            # plantilla de variables de entorno
 ├── assets/                 # iconos PNG opcionales para los botones
+├── docs/                   # capturas para el README
 ├── imagenes_elin/          # imágenes guardadas (se crea sola, no se sube)
 └── audios_elin/            # audios guardados (se crea sola, no se sube)
 ```

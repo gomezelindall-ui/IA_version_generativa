@@ -1,7 +1,7 @@
 """ELIN v5 · entorno limpio y centrado, con presentación y origen de cada imagen.
 
 - Fondo claro sólido con una trama de hojas dibujadas a línea, casi imperceptible.
-- Todo en el centro: botones principales, chat, opciones y resultados.
+- Todo en el centro: selector de modo, chat, menús de opciones y resultados.
 - Presentación con barra de carga, botones de minimizar/maximizar (y F11).
 - Cada imagen indica dónde se creó o se buscó y si usó aprendizaje automático o solo Python.
 - Las imágenes (creadas con IA, con recursos de Python o buscadas en internet) aparecen
@@ -50,7 +50,7 @@ MIN_HEIGHT = 660
 STEP_MIN = 0.55        # segundos mínimos por paso de la barra de carga
 MIN_INTRO = 3.0        # duración mínima de la presentación
 COL_MAX = 880          # ancho de la columna central
-FEED_TOP = 150         # donde empieza la zona de conversación
+HEADER_H = 60          # alto de la barra superior
 PLANT_INK = (233, 229, 219)   # color de la trama de plantas (casi igual al fondo)
 MAX_INPUT = 2000
 REQUEST_TIMEOUT = 45
@@ -163,7 +163,7 @@ ORIGIN_COLORS = {
     "python": ((238, 235, 229), (118, 111, 103)),
     "search": ((228, 238, 252), (62, 112, 204)),
 }
-CHAT_ORIGIN = "modelo de lenguaje · aprendizaje automático (local o en línea)"
+CHAT_ORIGIN = "modelo de lenguaje · aprendizaje automático"
 
 PROVIDER_CHIPS = [("auto", "Auto"), ("compare", "Comparar"), ("flux", "Flux"), ("turbo", "Turbo"),
                   ("horde", "Horde"), ("hf", "Hugging Face"), ("local", "Local")]
@@ -178,12 +178,12 @@ STYLES = [
 ]
 FORMATS = [("square", "Cuadrada", (768, 768)), ("wide", "Horizontal", (1024, 640)), ("tall", "Vertical", (640, 1024))]
 
-CHIPS = [
-    ("Resume un tema", "chat", "Resúmeme en pocas líneas: "),
-    ("Ideas creativas", "chat", "Dame 5 ideas creativas para "),
-    ("Explícame algo", "chat", "Explícame de forma sencilla "),
-    ("Crear una imagen", "create", "Un faro minimalista sobre un acantilado al amanecer, tonos cálidos"),
-    ("Buscar fotos", "search", "paisaje de montaña"),
+CHIPS = [   # (etiqueta, modo, texto inicial, icono)
+    ("Explícame algo", "chat", "Explícame de forma sencilla ", "chat"),
+    ("Ideas creativas", "chat", "Dame 5 ideas creativas para ", "wand"),
+    ("Crear una imagen", "create", "Un faro minimalista sobre un acantilado al amanecer, tonos cálidos", "create"),
+    ("Buscar fotos", "search", "paisaje de montaña", "search"),
+    ("Generar audio", "chat", "generar audio: ", "speaker"),
 ]
 
 SYSTEM_INSTRUCTIONS = (
@@ -287,7 +287,12 @@ def draw_icon(d: pygame.Surface, name: str, cx: int, cy: int, color: tuple[int, 
         pygame.draw.line(d, color, (cx - p(5), cy + p(5)), (cx + p(5), cy - p(5)), w)
     elif name == "refresh":
         pygame.draw.arc(d, color, pygame.Rect(cx - p(7), cy - p(7), p(14), p(14)), 0.7, 5.6, w)
-        pygame.draw.polygon(d, color, [(cx + p(7), cy - p(4)), (cx + p(10), cy - p(1)), (cx + p(2), cy - p(2))])
+        # punta de flecha al final del arco, apuntando en el sentido de giro
+        sx, sy = cx + 0.765 * p(7), cy - 0.644 * p(7)
+        tx, ty, nx, ny = 0.644, 0.765, 0.765, -0.644
+        pygame.draw.polygon(d, color, [(sx + tx * p(4.5), sy + ty * p(4.5)),
+                                       (sx + nx * p(3.6), sy + ny * p(3.6)),
+                                       (sx - nx * p(3.6), sy - ny * p(3.6))])
     elif name == "globe":
         pygame.draw.circle(d, color, (cx, cy), p(7), w)
         pygame.draw.ellipse(d, color, pygame.Rect(cx - p(3), cy - p(7), p(6), p(14)), max(1, w // 2))
@@ -301,6 +306,8 @@ def draw_icon(d: pygame.Surface, name: str, cx: int, cy: int, color: tuple[int, 
         pygame.draw.rect(d, color, pygame.Rect(cx - p(7), cy - p(5), p(11), p(11)), w, border_radius=p(2))
         pygame.draw.line(d, color, (cx - p(1), cy + p(1)), (cx + p(7), cy - p(7)), w)
         pygame.draw.lines(d, color, False, [(cx + p(2), cy - p(7)), (cx + p(7), cy - p(7)), (cx + p(7), cy - p(2))], w)
+    elif name == "check":
+        pygame.draw.lines(d, color, False, [(cx - p(6), cy), (cx - p(2), cy + p(4)), (cx + p(6), cy - p(5))], w)
     elif name == "minimize":
         pygame.draw.line(d, color, (cx - p(6), cy + p(3)), (cx + p(6), cy + p(3)), w)
     elif name == "maximize":
@@ -921,7 +928,6 @@ class ElinApp:
         self.provider = "auto"
         self.style = "none"
         self.fmt = "square"
-        self.opts_open = True
         self.enhancing = False
         self.job_ids = itertools.count(1)
         self.search_ids = itertools.count(1)
@@ -943,7 +949,11 @@ class ElinApp:
         self._bg: pygame.Surface | None = None
         self._bg_size = (0, 0)
         self._plant: pygame.Surface | None = None
-        self.opt_rows: list[tuple[str, list[dict[str, Any]]]] = []
+        self.menu: str | None = None            # menú desplegable abierto
+        self.menu_anchor = pygame.Rect(0, 0, 0, 0)
+        self._tip: tuple[str, pygame.Rect] | None = None
+        self._block_hover = False
+        self._last_asst: dict[str, Any] | None = None
         self.maximized = False
         self.bg_ready = False
         self.local_ml = False
@@ -977,7 +987,7 @@ class ElinApp:
         self.status, self.status_kind = text, kind
 
     def _reset_chat(self) -> None:
-        welcome = Message("assistant", "¡Hola! Soy ELIN, tu guía. Escríbeme una pregunta, pídeme una imagen o busca fotos: todo aparece aquí mismo. También puedes escribir ‘buscar audio: lluvia’ para encontrar sonidos existentes o ‘generar audio: Hola, este es mi audio’ para crear y guardar una narración MP3. La búsqueda web usa Google si configuras sus credenciales y conserva DuckDuckGo como respaldo.", self._now(), meta=True)
+        welcome = Message("assistant", "¡Hola! Soy ELIN, tu guía. Escríbeme una pregunta, pídeme una imagen o busca fotos: todo aparece aquí mismo. Prueba también ‘buscar audio: lluvia’ o ‘generar audio: Hola, este es mi audio’.", self._now(), meta=True)
         self.feed = [{"kind": "msg", "msg": welcome}]
         self.last_answer = welcome.text
         self.scroll = 0
@@ -987,6 +997,10 @@ class ElinApp:
         self.scroll = 10**7
 
     # ----------------------------------------------------------------- layout
+    def _composer_side_w(self) -> int:
+        """Ancho reservado a la derecha del cuadro de texto (botones)."""
+        return 62 + (112 if self.view == "create" else 0)
+
     def _update_layout(self) -> None:
         self.screen = pygame.display.get_surface() or self.screen
         width, height = self.screen.get_size()
@@ -995,15 +1009,12 @@ class ElinApp:
             self._build_background(width, height)
         self.cw = min(COL_MAX, width - 48)
         self.x0 = (width - self.cw) // 2
-        self.input_lines = wrap_input(self.input_text, self.fonts["body"], max(120, self.cw - 44))
-        rows = min(4, len(self.input_lines))
-        comp_h = rows * 24 + 14 + 62
-        self.composer_rect = pygame.Rect(self.x0, height - 20 - comp_h, self.cw, comp_h)
-        self.opt_rows = self._option_rows()
-        self.opts_h = self._options_height()
-        bottom = self.composer_rect.y - 10 - (self.opts_h + 10 if self.opts_h else 0)
-        self.opts_rect = pygame.Rect(self.x0, self.composer_rect.y - 10 - self.opts_h, self.cw, self.opts_h)
-        self.feed_rect = pygame.Rect(0, FEED_TOP, width, max(60, bottom - FEED_TOP))
+        self.input_lines = wrap_input(self.input_text, self.fonts["body"], max(120, self.cw - 22 - self._composer_side_w()))
+        rows = min(5, len(self.input_lines))
+        comp_h = rows * 24 + 32
+        self.composer_rect = pygame.Rect(self.x0, height - 16 - comp_h, self.cw, comp_h)
+        self.strip_rect = pygame.Rect(self.x0, self.composer_rect.y - 8 - 36, self.cw, 36)
+        self.feed_rect = pygame.Rect(0, HEADER_H, width, max(60, self.strip_rect.y - 8 - HEADER_H))
 
     def _build_background(self, width: int, height: int) -> None:
         if self._plant is None:
@@ -1023,13 +1034,6 @@ class ElinApp:
     def _center_text(self, text: str, font: pygame.font.Font, color: tuple[int, int, int], cx: int, y: int) -> None:
         surf = font.render(text, True, color)
         self.screen.blit(surf, (cx - surf.get_width() // 2, y))
-
-    def _spaced(self, text: str, font: pygame.font.Font, color: tuple[int, int, int], pos: tuple[int, int], spacing: int = 2) -> None:
-        x, y = pos
-        for ch in text:
-            surf = font.render(ch, True, color)
-            self.screen.blit(surf, (x, y))
-            x += surf.get_width() + spacing
 
     def _rounded(self, rect: pygame.Rect, color: tuple[int, int, int], radius: int = 14, border: tuple[int, int, int] | None = None) -> None:
         pygame.draw.rect(self.screen, color, rect, border_radius=radius)
@@ -1134,16 +1138,23 @@ class ElinApp:
         clip: pygame.Rect | None = None,
         radius: int = 12,
         tile_size: int | None = None,
+        tip: str = "",
+        trail: str | None = None,
+        inset_right: int = 0,
     ) -> bool:
         mouse = pygame.mouse.get_pos()
-        hover = enabled and rect.collidepoint(mouse) and (clip is None or clip.collidepoint(mouse))
+        hover = (enabled and not self._block_hover and rect.collidepoint(mouse)
+                 and (clip is None or clip.collidepoint(mouse)))
         font = self.fonts["bold"]
+        fill: tuple[int, int, int] | None
         border: tuple[int, int, int] | None
         if not enabled:
-            fill, fg, border = C["soft"], C["off"], None
+            fill, fg, border = (None if style == "flat" else C["soft"]), C["off"], None
         elif style == "primary":
             fill, fg, border = (C["accent_hover"] if hover else C["accent"]), C["on_accent"], None
             self._shadow(rect, radius, 8, 40 if hover else 26)
+        elif style == "flat":
+            fill, fg, border = (C["soft"] if hover else None), (C["text"] if hover else C["muted"]), None
         elif style == "chip":
             if active:
                 fill, fg, border = C["accent_soft"], C["accent"], C["accent"]
@@ -1151,17 +1162,20 @@ class ElinApp:
                 fill, fg, border = (C["soft"] if hover else C["panel"]), (C["muted"] if dim else C["text"]), C["border"]
         else:  # ghost
             fill, fg, border = (C["soft"] if hover else C["panel"]), C["text"], C["border"]
-        if style == "chip" and active:
+        if style == "chip" and active and enabled:
             self._shadow(rect, radius, 8, 18)
-        self._rounded(rect, fill, radius, border)
+        if fill is not None:
+            self._rounded(rect, fill, radius, border)
         label_surface = font.render(label, True, fg) if label else None
+        lw = label_surface.get_width() if label_surface else 0
         t_size = 0
         if tile:
             t_size = tile_size or (22 if style == "chip" else min(rect.h - 14, 26))
         icon_w = t_size or (18 if icon else 0)
         gap = 9 if (icon_w and label_surface) else 0
-        content_w = icon_w + gap + (label_surface.get_width() if label_surface else 0)
-        x = rect.centerx - content_w // 2
+        trail_w = 22 if trail else 0
+        content_w = icon_w + gap + lw + trail_w
+        x = rect.x + (rect.w - inset_right - content_w) // 2
         if tile:
             tsurf = self._tile(tile[0], t_size, tile[1])
             if not enabled or dim:
@@ -1174,10 +1188,15 @@ class ElinApp:
             x += 18 + gap
         if label_surface:
             self.screen.blit(label_surface, (x, rect.centery - label_surface.get_height() // 2))
+            x += lw
+        if trail:
+            draw_icon(self.screen, trail, x + 13, rect.centery + 1, fg, s=6)
         if enabled:
             self.buttons.append((rect.clip(clip) if clip else rect, action))
         if hover:
             self.hover_any = True
+            if tip:
+                self._tip = (tip, rect)
         return hover
 
     def _origin_pill(self, kind: str, detail: str, x: int, y: int, max_w: int) -> int:
@@ -1191,76 +1210,65 @@ class ElinApp:
             self._text(fit_text(detail, font, max(20, max_w - w - 10)), font, C["muted"], (x + w + 10, y + 4))
         return w
 
-    def _chip_w(self, it: dict[str, Any]) -> int:
-        return self.fonts["bold"].size(it["label"])[0] + 28 + (28 if it.get("tile") else 0)
-
-    def _flow_rows(self, items: list[dict[str, Any]], max_w: int) -> int:
-        rows, cx = 1, 0
-        for it in items:
-            w = self._chip_w(it)
-            if cx + w > max_w and cx > 0:
-                rows, cx = rows + 1, 0
-            cx += w + 8
-        return rows
-
-    def _flow(self, items: list[dict[str, Any]], x: int, y: int, max_w: int, h: int = 34, gap: int = 8) -> int:
-        cx, cy = x, y
-        for it in items:
-            w = self._chip_w(it)
-            if cx + w > x + max_w and cx > x:
-                cx, cy = x, cy + h + gap
-            self._btn(pygame.Rect(cx, cy, w, h), it["action"], it["label"], tile=it.get("tile"), style="chip",
-                      active=it.get("active", False), dim=it.get("dim", False), radius=h // 2)
-            cx += w + gap
-        return cy + h
-
     # ---------------------------------------------------------- cabecera central
     def _draw_top(self) -> None:
-        cx = self.width // 2
-        logo = self._tile("logo", 36, "E")
-        brand = self.fonts["brand"].render("ELIN", True, C["text"])
-        total = 36 + 10 + brand.get_width()
-        bx = cx - total // 2
-        self.screen.blit(logo, (bx, 14))
-        self.screen.blit(brand, (bx + 46, 12))
-        if self.status_kind == "error":
-            dot = C["danger"]
-        elif self.status_kind == "working" or self.busy or any(e["kind"] == "pending" for e in self.feed):
-            dot = C["accent"] if int(time.time() * 3) % 2 == 0 else C["accent_hover"]
-        else:
-            dot = C["ok"]
-        status = fit_text(self.status, self.fonts["small"], min(self.cw - 520, 460) if self.cw > 640 else 200)
-        sw = self.fonts["small"].size(status)[0]
-        pygame.draw.circle(self.screen, dot, (cx - sw // 2 - 10, 62), 4)
-        self._text(status, self.fonts["small"], C["muted"], (cx - sw // 2, 54))
+        bar = pygame.Rect(0, 0, self.width, HEADER_H)
+        pygame.draw.rect(self.screen, C["panel"], bar)
+        pygame.draw.line(self.screen, C["border"], (0, HEADER_H - 1), (self.width, HEADER_H - 1))
+        cy, cx = HEADER_H // 2, self.width // 2
+        font = self.fonts["bold"]
+        mouse = pygame.mouse.get_pos()
+        modes = [("chat", "Conversar", "chat", "Conversar con ELIN"),
+                 ("create", "Crear", "image", "Crear una imagen con IA"),
+                 ("search", "Buscar", "search", "Buscar imágenes en internet")]
+        full_w = [18 + 8 + font.size(lb)[0] + 28 for _v, lb, _i, _t in modes]
+        compact = self.cw < 2 * (204 + sum(full_w) // 2 + 4)
+        widths = [44] * 3 if compact else full_w
 
-        # herramientas a los lados
-        self._btn(pygame.Rect(self.x0, 30, 112, 38), self._new_chat, "Nueva", tile=("plus", None))
-        web = pygame.Rect(self.x0 + 122, 30, 120, 38)
-        self._btn(web, self._toggle_search, "Web", tile=("globe", None))
-        sw_r = pygame.Rect(web.right - 40, web.centery - 8, 30, 16)
-        self._rounded(sw_r, C["accent"] if self.use_search else C["off"], 8)
-        pygame.draw.circle(self.screen, (255, 255, 255), (sw_r.right - 8 if self.use_search else sw_r.x + 8, sw_r.centery), 6)
-        copy = pygame.Rect(self.x0 + self.cw - 106, 30, 106, 38)
-        speak = pygame.Rect(copy.x - 10 - 106, 30, 106, 38)
-        self._btn(copy, self._copy_last, "Copiar", tile=("copy", None))
-        if self.speak_loading:
-            self._btn(speak, self._toggle_speak, "…", tile=("speaker", None), enabled=False)
-        else:
-            self._btn(speak, self._toggle_speak, "Detener" if self.speaking else "Leer", tile=("stop" if self.speaking else "speaker", None))
+        # marca
+        self.screen.blit(self._tile("logo", 34, "E"), (self.x0, cy - 17))
+        brand = self.fonts["title"].render("ELIN", True, C["text"])
+        self.screen.blit(brand, (self.x0 + 44, cy - brand.get_height() // 2))
 
-        # controles de la ventana (minimizar / maximizar-restaurar)
-        self._btn(pygame.Rect(self.width - 84, 4, 36, 24), self._minimize, "", icon="minimize", radius=8)
-        self._btn(pygame.Rect(self.width - 44, 4, 36, 24), self._toggle_maximize, "",
-                  icon="restore" if self.maximized else "maximize", radius=8)
+        # selector de modo (control segmentado)
+        box = pygame.Rect(0, 0, sum(widths) + 8, 42)
+        box.center = (cx, cy)
+        self._rounded(box, C["soft"], 21, C["border"])
+        sx = box.x + 4
+        for (view, label, icon, tip), w in zip(modes, widths):
+            seg = pygame.Rect(sx, box.y + 4, w, 34)
+            active = self.view == view
+            hover = not self._block_hover and seg.collidepoint(mouse)
+            if active:
+                self._shadow(seg, 17, 6, 30)
+                self._rounded(seg, C["accent"], 17)
+                fg = C["on_accent"]
+            else:
+                if hover:
+                    self._rounded(seg, C["border"], 17)
+                fg = C["text"] if hover else C["muted"]
+            content = 18 + (0 if compact else 8 + font.size(label)[0])
+            ix = seg.centerx - content // 2
+            draw_icon(self.screen, icon, ix + 9, seg.centery, fg, s=7)
+            if not compact:
+                txt = font.render(label, True, fg)
+                self.screen.blit(txt, (ix + 26, seg.centery - txt.get_height() // 2))
+            self.buttons.append((seg, lambda v=view: self._goto(v)))
+            if hover:
+                self.hover_any = True
+                self._tip = (tip, seg)
+            sx += w
 
-        # botones principales, centrados
-        modes = [("chat", "Conversar", "chat"), ("create", "Crear imagen", "create"), ("search", "Buscar imágenes", "search")]
-        bw, gap = 206, 12
-        start = cx - (bw * 3 + gap * 2) // 2
-        for i, (view, label, tile) in enumerate(modes):
-            self._btn(pygame.Rect(start + i * (bw + gap), 82, bw, 54), lambda v=view: self._goto(v), label,
-                      tile=(tile, None), style="chip", active=self.view == view, radius=27, tile_size=34)
+        # acciones a la derecha: nueva conversación + controles de ventana
+        rx = self.x0 + self.cw
+        maxb = pygame.Rect(rx - 32, cy - 16, 32, 32)
+        self._btn(maxb, self._toggle_maximize, "", icon="restore" if self.maximized else "maximize", style="flat",
+                  radius=10, tip="Restaurar" if self.maximized else "Maximizar (F11)")
+        minb = pygame.Rect(maxb.x - 4 - 32, cy - 16, 32, 32)
+        self._btn(minb, self._minimize, "", icon="minimize", style="flat", radius=10, tip="Minimizar")
+        new_w = 42 if compact else 104
+        newb = pygame.Rect(minb.x - 12 - new_w, cy - 18, new_w, 36)
+        self._btn(newb, self._new_chat, "" if compact else "Nueva", icon="plus", radius=18, tip="Nueva conversación (Ctrl+N)")
 
     # --------------------------------------------------------------------- feed
     def _search_geom(self) -> tuple[int, int, int, int]:
@@ -1277,18 +1285,18 @@ class ElinApp:
             if m.cache_key != mb:
                 m.lines = wrap_text(clean_markdown(m.text), self.fonts["body"], mb - 38)
                 m.cache_key = mb
-            return len(m.lines) * 24 + 52
+            return len(m.lines) * 24 + (24 if m.role == "user" else 48)
         if kind == "pending":
             return 238
         if kind == "image":
             it: GalleryItem = e["item"]
-            card_w = min(self.cw, 560)
-            img_w = card_w - 32
-            img_h = int(min(380, img_w * it.pil.size[1] / it.pil.size[0]))
+            card_w = min(self.cw, 520)
+            img_w = card_w - 28
+            img_h = int(min(360, img_w * it.pil.size[1] / it.pil.size[0]))
             e["img_h"] = img_h
             if "cap" not in e:
-                e["cap"] = wrap_text(it.prompt, self.fonts["small"], card_w - 32)[:2]
-            return 68 + img_h + 10 + len(e["cap"]) * 19 + 12 + 40 + 16
+                e["cap"] = wrap_text(it.prompt, self.fonts["small"], card_w - 28)[:2]
+            return 64 + img_h + 8 + len(e["cap"]) * 19 + 10 + 34 + 12
         if kind == "search":
             cols, gap, _tile, card_h = self._search_geom()
             n = len(e["results"])
@@ -1303,13 +1311,15 @@ class ElinApp:
         self.screen.set_clip(fr)
         gap = 16
         heights = [self._entry_height(e) for e in self.feed]
+        self._last_asst = next((e for e in reversed(self.feed)
+                                if e["kind"] == "msg" and e["msg"].role == "assistant"), None)
         total = 18 + sum(h + gap for h in heights)
         chips = len(self.feed) == 1 and not self.busy
-        chip_rects: list[tuple[pygame.Rect, tuple[str, str, str]]] = []
+        chip_rects: list[tuple[pygame.Rect, tuple[str, ...]]] = []
         if chips:
             cx, cy = self.x0, total
             for chip in CHIPS:
-                w = self.fonts["bold"].size(chip[0])[0] + 32
+                w = self.fonts["bold"].size(chip[0])[0] + 56
                 if cx + w > self.x0 + self.cw:
                     cx, cy = self.x0, cy + 46
                 chip_rects.append((pygame.Rect(cx, cy, w, 36), chip))
@@ -1334,7 +1344,7 @@ class ElinApp:
         for rect, chip in chip_rects:
             r = rect.move(0, fr.y - self.scroll)
             if r.bottom >= fr.top and r.top <= fr.bottom:
-                self._btn(r, lambda c=chip: self._use_chip(c), chip[0], style="chip", clip=fr, radius=18)
+                self._btn(r, lambda c=chip: self._use_chip(c), chip[0], tile=(chip[3], None), style="chip", clip=fr, radius=18)
         if self.max_scroll > 0:
             track_h = fr.height - 16
             thumb_h = max(36, int(track_h * fr.height / total))
@@ -1351,33 +1361,23 @@ class ElinApp:
         body = self.fonts["body"]
         if kind == "msg":
             m: Message = e["msg"]
+            small = self.fonts["small"]
             mb = min(700, self.cw - 20)
-            width = max(200, min(mb, max((body.size(l)[0] for l in m.lines), default=0) + 42))
-            if m.origin:
-                width = min(max(width, 430), max(mb, 200))
             is_user = m.role == "user"
+            width = max(160, min(mb, max((body.size(l)[0] for l in m.lines), default=0) + 40))
+            if m.origin and not is_user:
+                width = min(max(width, 480), max(mb, 200))
             x = self.x0 + self.cw - width if is_user else self.x0
             r = pygame.Rect(x, y, width, h)
             if is_user:
-                self._rounded(r, C["accent_soft"], 18)
+                self._rounded(r, C["accent_soft"], 18, (246, 210, 192))
             else:
                 self._shadow(r, 18, 8, 22)
                 self._rounded(r, C["panel"], 18, C["border"])
-            name = "Tú" if is_user else "ELIN"
-            self._text(name, self.fonts["bold"], C["accent"] if is_user else C["text"], (r.x + 18, r.y + 12))
-            if m.origin and not is_user:
-                self._text("· " + m.origin, self.fonts["small"], C["muted"], (r.x + 18 + self.fonts["bold"].size(name)[0] + 8, r.y + 14))
-            stamp = self.fonts["small"].render(m.stamp, True, C["muted"])
-            if is_user:
-                self.screen.blit(stamp, (r.right - 16 - stamp.get_width(), r.y + 14))
-            else:
-                copy_rect = pygame.Rect(r.right - 38, r.y + 7, 28, 26)
-                self._btn(copy_rect, lambda t=m.text: self._copy_text(t), "", icon="copy", clip=fr, radius=8)
-                self.screen.blit(stamp, (copy_rect.x - 8 - stamp.get_width(), r.y + 14))
             source_links = re.findall(r"(?m)^(?:Página|Archivo(?: directo)?|Archivo):\s*(https?://\S+)", m.text)
             link_index = 0
             for i, line in enumerate(m.lines):
-                line_y = r.y + 38 + i * 24
+                line_y = r.y + 12 + i * 24
                 is_link_line = bool(re.match(r"^(?:Página|Archivo(?: directo)?|Archivo):\s*https?://", line.strip()))
                 if is_link_line and link_index < len(source_links):
                     url = source_links[link_index]
@@ -1388,6 +1388,28 @@ class ElinApp:
                     self.buttons.append((link_rect, lambda target=url: webbrowser.open(target)))
                 else:
                     self._text(line, body, C["text"], (r.x + 19, line_y))
+            if not is_user:
+                # pie del mensaje: origen · hora · acciones (solo al pasar el ratón o en la última respuesta)
+                fy = r.bottom - 32
+                mouse = pygame.mouse.get_pos()
+                hovered = r.collidepoint(mouse) and fr.collidepoint(mouse) and not self._block_hover
+                show = hovered or (e is self._last_asst and not m.meta)
+                stamp = small.render(m.stamp, True, C["muted"])
+                right = r.right - 14
+                self.screen.blit(stamp, (right - stamp.get_width(), fy + 5))
+                right -= stamp.get_width() + 8
+                if show:
+                    copy_r = pygame.Rect(right - 26, fy, 26, 24)
+                    self._btn(copy_r, lambda t=m.text: self._copy_text(t), "", icon="copy", style="flat",
+                              clip=fr, radius=8, tip="Copiar")
+                    speak_r = pygame.Rect(copy_r.x - 4 - 26, fy, 26, 24)
+                    self._btn(speak_r, lambda t=m.text: self._toggle_speak(t), "",
+                              icon="stop" if self.speaking else "speaker", style="flat",
+                              enabled=not self.speak_loading, clip=fr, radius=8,
+                              tip="Detener lectura" if self.speaking else "Leer en voz alta")
+                if m.origin:
+                    avail = r.w - 19 - 14 - stamp.get_width() - 8 - 66
+                    self._text(fit_text(m.origin, small, max(40, avail)), small, C["muted"], (r.x + 19, fy + 5))
         elif kind == "pending":
             job = e["job"]
             r = pygame.Rect(self.x0, y, min(self.cw, 380), h)
@@ -1407,30 +1429,32 @@ class ElinApp:
             self._text(fit_text(job["prompt"], self.fonts["small"], r.w - 32), self.fonts["small"], C["off"], (r.x + 16, area.bottom + 28))
         elif kind == "image":
             it: GalleryItem = e["item"]
-            card_w = min(self.cw, 560)
+            card_w = min(self.cw, 520)
             r = pygame.Rect(self.x0, y, card_w, h)
             self._shadow(r, 18, 9, 24)
             self._rounded(r, C["panel"], 18, C["border"])
-            self.screen.blit(self._tile(it.used_key, 20, TILE_LETTERS.get(it.used_key, "?")), (r.x + 16, r.y + 12))
-            self._text(it.provider_label, self.fonts["bold"], C["text"], (r.x + 44, r.y + 14))
+            self.screen.blit(self._tile(it.used_key, 20, TILE_LETTERS.get(it.used_key, "?")), (r.x + 14, r.y + 11))
+            self._text(it.provider_label, self.fonts["bold"], C["text"], (r.x + 42, r.y + 12))
             ns = self.fonts["small"].render(f"{it.pil.size[0]}×{it.pil.size[1]}", True, C["muted"])
-            self.screen.blit(ns, (r.right - 16 - ns.get_width(), r.y + 15))
-            kind, detail = provider_origin(it.used_key)
-            self._origin_pill(kind, detail, r.x + 16, r.y + 40, card_w - 32)
-            img_rect = pygame.Rect(r.x + 16, r.y + 68, card_w - 32, e["img_h"])
+            self.screen.blit(ns, (r.right - 14 - ns.get_width(), r.y + 14))
+            o_kind, detail = provider_origin(it.used_key)
+            self._origin_pill(o_kind, detail, r.x + 14, r.y + 36, card_w - 28)
+            img_rect = pygame.Rect(r.x + 14, r.y + 64, card_w - 28, e["img_h"])
             self.screen.blit(self._cover(it.surface, img_rect.size, 12), img_rect)
             self.buttons.append((img_rect.clip(fr), lambda x=it: self._open_lightbox(x)))
-            if img_rect.collidepoint(pygame.mouse.get_pos()) and fr.collidepoint(pygame.mouse.get_pos()):
+            if img_rect.collidepoint(pygame.mouse.get_pos()) and fr.collidepoint(pygame.mouse.get_pos()) and not self._block_hover:
                 self.hover_any = True
-            cy = img_rect.bottom + 10
+            cy = img_rect.bottom + 8
             for line in e["cap"]:
-                self._text(line, self.fonts["small"], C["muted"], (r.x + 16, cy))
+                self._text(line, self.fonts["small"], C["muted"], (r.x + 14, cy))
                 cy += 19
-            by = r.bottom - 56
-            self._btn(pygame.Rect(r.x + 16, by, 116, 40), lambda x=it: self._save_item(x), "Guardar", icon="download", style="primary", clip=fr)
-            self._btn(pygame.Rect(r.x + 142, by, 100, 40), lambda x=it: self._vary_item(x), "Variar", tile=("refresh", None), clip=fr)
-            self._btn(pygame.Rect(r.x + 252, by, 106, 40), lambda x=it: self._open_lightbox(x), "Ampliar", tile=("image", None), clip=fr)
-            self._btn(pygame.Rect(r.right - 56, by, 40, 40), lambda x=it: self._delete_item(x), "", tile=("trash", None), clip=fr)
+            by = r.bottom - 46
+            self._btn(pygame.Rect(r.x + 14, by, 112, 34), lambda x=it: self._save_item(x), "Guardar", icon="download",
+                      style="primary", clip=fr, radius=17)
+            self._btn(pygame.Rect(r.x + 134, by, 100, 34), lambda x=it: self._vary_item(x), "Variar", icon="refresh",
+                      clip=fr, radius=17)
+            self._btn(pygame.Rect(r.right - 14 - 34, by, 34, 34), lambda x=it: self._delete_item(x), "", icon="trash",
+                      clip=fr, radius=17, tip="Eliminar")
         elif kind == "search":
             cols, gap, tile, card_h = self._search_geom()
             n = len(e["results"])
@@ -1477,91 +1501,195 @@ class ElinApp:
             self.hover_any = True
 
     # ------------------------------------------------------------------ opciones
-    def _option_rows(self) -> list[tuple[str, list[dict[str, Any]]]]:
-        if self.view == "create":
-            motors = [{"label": label, "tile": (key, TILE_LETTERS[key]), "active": self.provider == key,
-                       "dim": key in ("hf", "local") and not provider_available(key), "action": lambda k=key: self._pick_provider(k)}
-                      for key, label in PROVIDER_CHIPS]
-            styles = [{"label": label, "active": self.style == key, "action": lambda k=key: setattr(self, "style", k)} for key, label, _ in STYLES]
-            formats = [{"label": label, "active": self.fmt == key, "action": lambda k=key: setattr(self, "fmt", k)} for key, label, _ in FORMATS]
-            return [("MOTOR DE IA", motors), ("ESTILO", styles), ("FORMATO", formats)]
-        if self.view == "search":
+    def _dropdown_w(self, label: str, tile: bool) -> int:
+        return self.fonts["bold"].size(label)[0] + 50 + (31 if tile else 0)
+
+    def _status_dot(self) -> tuple[int, int, int]:
+        if self.status_kind == "error":
+            return C["danger"]
+        if self.status_kind == "working" or self.busy or any(e["kind"] == "pending" for e in self.feed):
+            return C["accent"] if int(time.time() * 3) % 2 == 0 else C["accent_hover"]
+        return C["ok"]
+
+    def _draw_strip(self) -> None:
+        """Fila compacta sobre el cuadro de texto: opciones del modo actual y estado."""
+        r = self.strip_rect
+        small = self.fonts["small"]
+        wide = self.cw >= 780
+        x = r.x
+        if self.view == "chat":
+            label = "Búsqueda web"
+            w = self.fonts["bold"].size(label)[0] + 31 + 28 + 42
+            rect = pygame.Rect(x, r.y, w, r.h)
+            self._btn(rect, self._toggle_search, label, tile=("globe", None), style="chip", active=self.use_search,
+                      radius=18, inset_right=42, tip="Permite que ELIN consulte la web al responder")
+            sw_r = pygame.Rect(rect.right - 12 - 30, rect.centery - 8, 30, 16)
+            self._rounded(sw_r, C["accent"] if self.use_search else C["off"], 8)
+            pygame.draw.circle(self.screen, (255, 255, 255), (sw_r.right - 8 if self.use_search else sw_r.x + 8, sw_r.centery), 6)
+            x = rect.right + 8
+        else:
+            if self.view == "create":
+                prov = dict(PROVIDER_CHIPS)[self.provider]
+                style = next(l for k, l, _ in STYLES if k == self.style)
+                fmt = next(l for k, l, _ in FORMATS if k == self.fmt)
+                specs = [("provider", f"Motor: {prov}" if wide else prov, (self.provider, TILE_LETTERS[self.provider]), "Motor de IA"),
+                         ("style", f"Estilo: {style}" if wide else style, None, "Estilo visual"),
+                         ("fmt", f"Formato: {fmt}" if wide else fmt, None, "Formato de la imagen")]
+            else:
+                n = sum(1 for k, _lb, _f, env in SEARCH_SOURCES if self.sources_on[k] and (env is None or os.environ.get(env)))
+                specs = [("sources", f"Fuentes: {n}/{len(SEARCH_SOURCES)}", ("search", None), "Fuentes de imágenes")]
+            for kind, label, tile, tip in specs:
+                rect = pygame.Rect(x, r.y, self._dropdown_w(label, tile is not None), r.h)
+                self._btn(rect, lambda k=kind, rc=rect: self._toggle_menu(k, rc), label, tile=tile, style="chip",
+                          active=self.menu == kind, radius=18, trail="down", tip=tip)
+                x = rect.right + 8
+        avail = r.right - x - 12
+        if avail > 90:
+            status = fit_text(self.status, small, avail - 16)
+            sw = small.size(status)[0]
+            sx = r.right - sw
+            pygame.draw.circle(self.screen, self._status_dot(), (sx - 12, r.centery), 4)
+            self._text(status, small, C["muted"], (sx, r.centery - small.get_height() // 2))
+
+    def _toggle_menu(self, kind: str, anchor: pygame.Rect) -> None:
+        if self.menu == kind:
+            self.menu = None
+        else:
+            self.menu, self.menu_anchor = kind, anchor.copy()
+
+    def _close_menu(self) -> None:
+        self.menu = None
+
+    def _choose(self, fn: Callable[[], None]) -> None:
+        fn()
+        self.menu = None
+
+    def _menu_items(self) -> list[dict[str, Any]]:
+        if self.menu == "provider":
+            return [{"label": label, "tile": (key, TILE_LETTERS[key]), "checked": self.provider == key,
+                     "dim": key in ("hf", "local") and not provider_available(key),
+                     "action": lambda k=key: self._choose(lambda: self._pick_provider(k))}
+                    for key, label in PROVIDER_CHIPS]
+        if self.menu == "style":
+            return [{"label": label, "checked": self.style == key,
+                     "action": lambda k=key: self._choose(lambda: setattr(self, "style", k))}
+                    for key, label, _ in STYLES]
+        if self.menu == "fmt":
+            return [{"label": label, "sub": f"{size[0]}×{size[1]}", "checked": self.fmt == key,
+                     "action": lambda k=key: self._choose(lambda: setattr(self, "fmt", k))}
+                    for key, label, size in FORMATS]
+        if self.menu == "sources":
             items = []
             for key, label, _fn, env in SEARCH_SOURCES:
                 ok = env is None or bool(os.environ.get(env))
-                items.append({"label": label, "tile": (key, TILE_LETTERS[key]), "active": self.sources_on[key] and ok, "dim": not ok,
+                items.append({"label": label, "tile": (key, TILE_LETTERS[key]), "checked": self.sources_on[key] and ok,
+                              "dim": not ok, "sub": "" if ok else "requiere clave",
                               "action": lambda k=key, e=env, lb=label: self._toggle_source(k, e, lb)})
-            return [("FUENTES DE IMÁGENES", items)]
+            return items
         return []
 
-    def _options_height(self) -> int:
-        if not self.opt_rows:
-            return 0
-        if not self.opts_open:
-            return 46
-        h = 46
-        for _title, items in self.opt_rows:
-            rows = self._flow_rows(items, self.cw - 32)
-            h += 22 + rows * 34 + (rows - 1) * 8 + 10
-        return h + 4
-
-    def _option_summary(self) -> str:
-        if self.view == "create":
-            prov = dict(PROVIDER_CHIPS)[self.provider]
-            style = next(l for k, l, _ in STYLES if k == self.style)
-            fmt = next(l for k, l, _ in FORMATS if k == self.fmt)
-            return f"Motor {prov}  ·  {style}  ·  {fmt}"
-        names = [lb for k, lb, _f, env in SEARCH_SOURCES if self.sources_on[k] and (env is None or os.environ.get(env))]
-        return "Fuentes: " + (", ".join(names) or "ninguna")
-
-    def _draw_options(self) -> None:
-        if not self.opts_h:
+    def _draw_menu(self) -> None:
+        if self.menu is None:
             return
-        r = self.opts_rect
-        self._shadow(r, 18, 10, 24)
-        self._rounded(r, C["panel"], 18, C["border"])
-        self._text("Opciones", self.fonts["bold"], C["text"], (r.x + 18, r.y + 14))
-        self._text(fit_text(self._option_summary(), self.fonts["small"], r.w - 260), self.fonts["small"], C["muted"], (r.x + 98, r.y + 16))
-        self._btn(pygame.Rect(r.right - 118, r.y + 7, 104, 32), lambda: setattr(self, "opts_open", not self.opts_open),
-                  "Ocultar" if self.opts_open else "Cambiar", icon="down", radius=16)
-        if not self.opts_open:
+        items = self._menu_items()
+        if not items:
+            self.menu = None
             return
-        y = r.y + 46
-        for title, items in self.opt_rows:
-            self._spaced(title, self.fonts["small"], C["muted"], (r.x + 18, y), 3)
-            y = self._flow(items, r.x + 16, y + 20, r.w - 32) + 10
+        self._block_hover = False
+        bold, small = self.fonts["bold"], self.fonts["small"]
+        ih = 38
+        need = 0
+        for it in items:
+            n = bold.size(it["label"])[0] + (34 if it.get("tile") else 0)
+            if it.get("sub"):
+                n += small.size(it["sub"])[0] + 14
+            need = max(need, n)
+        w = max(210, need + 64)
+        h = len(items) * ih + 12
+        a = self.menu_anchor
+        x = max(8, min(a.x, self.width - w - 8))
+        y = a.top - 8 - h
+        if y < HEADER_H + 4:
+            y = min(a.bottom + 8, self.height - h - 8)
+        panel = pygame.Rect(x, y, w, h)
+        # un clic fuera cierra el menú; un clic dentro no hace nada salvo en las filas
+        self.buttons.append((pygame.Rect(0, 0, self.width, self.height), self._close_menu))
+        self.buttons.append((panel, lambda: None))
+        self._shadow(panel, 16, 14, 44)
+        self._rounded(panel, C["panel"], 16, C["border"])
+        mouse = pygame.mouse.get_pos()
+        for i, it in enumerate(items):
+            row = pygame.Rect(panel.x + 6, panel.y + 6 + i * ih, panel.w - 12, ih)
+            hover = row.collidepoint(mouse)
+            checked, dim = bool(it.get("checked")), bool(it.get("dim"))
+            if hover:
+                self._rounded(row, C["soft"], 10)
+                self.hover_any = True
+            elif checked:
+                self._rounded(row, C["accent_soft"], 10)
+            tx = row.x + 12
+            if it.get("tile"):
+                t = self._tile(it["tile"][0], 24, it["tile"][1])
+                if dim:
+                    t = t.copy()
+                    t.set_alpha(110)
+                self.screen.blit(t, (tx, row.centery - 12))
+                tx += 34
+            color = C["off"] if dim else (C["accent"] if checked else C["text"])
+            lab = bold.render(it["label"], True, color)
+            self.screen.blit(lab, (tx, row.centery - lab.get_height() // 2))
+            right = row.right - 14
+            if checked:
+                draw_icon(self.screen, "check", right - 6, row.centery, C["accent"], s=7, w=2)
+                right -= 24
+            if it.get("sub"):
+                sb = small.render(it["sub"], True, C["muted"])
+                self.screen.blit(sb, (right - sb.get_width(), row.centery - sb.get_height() // 2))
+            self.buttons.append((row, it["action"]))
+
+    def _draw_tooltip(self) -> None:
+        if not self._tip:
+            return
+        text, rect = self._tip
+        font = self.fonts["small"]
+        surf = font.render(text, True, (255, 255, 255))
+        w, h = surf.get_width() + 18, surf.get_height() + 10
+        x = max(6, min(rect.centerx - w // 2, self.width - w - 6))
+        y = rect.bottom + 8
+        if y + h > self.height - 6:
+            y = rect.top - 8 - h
+        self._rounded(pygame.Rect(x, y, w, h), (48, 43, 39), 8)
+        self.screen.blit(surf, (x + 9, y + 5))
 
     # ----------------------------------------------------------------- composer
     def _draw_composer(self) -> None:
         rect = self.composer_rect
-        self._shadow(rect, 22, 14, 36)
-        self._rounded(rect, C["panel"], 22, C["border"])
+        self._shadow(rect, 24, 14, 36)
+        self._rounded(rect, C["panel"], 24, C["border"])
         font = self.fonts["body"]
-        tx, ty = rect.x + 22, rect.y + 14
-        placeholders = {"chat": "Escribe tu mensaje…", "create": "Describe la imagen que imaginas…", "search": "¿Qué imágenes quieres encontrar?"}
+        tx, ty = rect.x + 22, rect.y + 16
+        placeholders = {"chat": "Escribe tu mensaje…", "create": "Describe la imagen que imaginas…",
+                        "search": "¿Qué imágenes quieres encontrar?"}
         if not self.input_text:
             self._text(placeholders[self.view], font, C["muted"], (tx, ty))
             caret = (tx, ty)
         else:
-            shown = self.input_lines[-4:]
+            shown = self.input_lines[-5:]
             for i, line in enumerate(shown):
                 self._text(line, font, C["text"], (tx, ty + i * 24))
             cx = tx + font.size(shown[-1])[0] + (font.size(" ")[0] if self.input_text.endswith(" ") else 0)
             caret = (cx, ty + (len(shown) - 1) * 24)
         if int(time.time() * 2) % 2 == 0:
             pygame.draw.line(self.screen, C["accent"], (caret[0] + 1, caret[1] + 1), (caret[0] + 1, caret[1] + 21), 2)
-        by = rect.bottom - 52
         can = bool(self.input_text.strip())
-        label, icon = {"chat": ("Enviar", "send"), "create": ("Crear", "wand"), "search": ("Buscar", "search")}[self.view]
-        primary = pygame.Rect(rect.right - 14 - 120, by, 120, 42)
-        self._btn(primary, self._submit, label, icon=icon, style="primary", enabled=can, radius=16)
-        second = pygame.Rect(primary.x - 10 - 130, by, 130, 42)
-        if self.view == "chat":
-            self._btn(second, self._quick_create, "Imagen", tile=("create", None), enabled=can, radius=16)
-        elif self.view == "create":
-            self._btn(second, self._enhance_prompt, "Mejorar" if not self.enhancing else "Mejorando…", tile=("wand", None), enabled=can and not self.enhancing, radius=16)
-        hint = {"chat": "Enter envía · Shift+Enter nueva línea", "create": "Enter crea · Ctrl+Enter crea desde cualquier modo", "search": "Enter busca en todas las fuentes"}[self.view]
-        self._text(hint, self.fonts["small"], C["muted"], (rect.x + 22, by + 13))
+        icon = {"chat": "send", "create": "wand", "search": "search"}[self.view]
+        tip = {"chat": "Enviar (Enter)", "create": "Crear imagen (Enter)", "search": "Buscar (Enter)"}[self.view]
+        send = pygame.Rect(rect.right - 10 - 40, rect.bottom - 8 - 40, 40, 40)
+        self._btn(send, self._submit, "", icon=icon, style="primary", enabled=can, radius=20, tip=tip)
+        if self.view == "create":
+            enh = pygame.Rect(send.x - 8 - 104, send.y, 104, 40)
+            self._btn(enh, self._enhance_prompt, "Mejorar" if not self.enhancing else "…", tile=("wand", None),
+                      enabled=can and not self.enhancing, radius=20, tip="Reescribe tu idea como un prompt detallado")
 
     # ------------------------------------------------------------------ lightbox
     def _draw_lightbox(self) -> None:
@@ -1604,17 +1732,17 @@ class ElinApp:
         else:
             o_kind, o_detail = "search", f"Encontrada en internet · {obj.source}"
         self._origin_pill(o_kind, o_detail, panel.x + 22, ty + 28, panel.w - 44)
-        by = panel.bottom - 62
+        by = panel.bottom - 60
         bx = panel.x + 20
         if isinstance(obj, GalleryItem):
-            self._btn(pygame.Rect(bx, by, 150, 44), lambda: self._save_item(obj), "Guardar", icon="download", style="primary", radius=16)
-            self._btn(pygame.Rect(bx + 160, by, 120, 44), lambda: (self._close_lightbox(), self._vary_item(obj)), "Variar", tile=("refresh", None), radius=16)
-            self._btn(pygame.Rect(bx + 290, by, 130, 44), lambda: (self._close_lightbox(), self._delete_item(obj)), "Eliminar", tile=("trash", None), radius=16)
+            self._btn(pygame.Rect(bx, by, 140, 42), lambda: self._save_item(obj), "Guardar", icon="download", style="primary", radius=16)
+            self._btn(pygame.Rect(bx + 150, by, 120, 42), lambda: (self._close_lightbox(), self._vary_item(obj)), "Variar", icon="refresh", radius=16)
         else:
-            self._btn(pygame.Rect(bx, by, 210, 44), lambda: self._save_result(obj), "Guardar con créditos", icon="download", style="primary", radius=16)
-            self._btn(pygame.Rect(bx + 220, by, 120, 44), lambda: self._open_result(obj), "Página", tile=("link", None), radius=16)
-            self._btn(pygame.Rect(bx + 350, by, 150, 44), lambda: self._similar_result(obj), "Crear similar", tile=("wand", None), radius=16)
-        self._btn(pygame.Rect(panel.right - 20 - 120, by, 120, 44), self._close_lightbox, "Cerrar", icon="close", radius=16)
+            self._btn(pygame.Rect(bx, by, 210, 42), lambda: self._save_result(obj), "Guardar con créditos", icon="download", style="primary", radius=16)
+            self._btn(pygame.Rect(bx + 220, by, 120, 42), lambda: self._open_result(obj), "Página", icon="link", radius=16)
+            self._btn(pygame.Rect(bx + 350, by, 150, 42), lambda: self._similar_result(obj), "Crear similar", icon="wand", radius=16)
+        self._btn(pygame.Rect(panel.right - 14 - 36, panel.y + 14, 36, 36), self._close_lightbox, "", icon="close",
+                  radius=18, tip="Cerrar (Esc)")
 
     # ------------------------------------------------------------------ ventana
     def _sdl_window(self) -> Any:
@@ -1799,16 +1927,20 @@ class ElinApp:
         self._update_layout()
         self.buttons = []
         self.hover_any = False
+        self._tip = None
+        self._block_hover = self.menu is not None
         if self._bg is not None:
             self.screen.blit(self._bg, (0, 0))
         else:
             self.screen.fill(C["bg"])
         self._draw_feed()
         self._draw_top()
-        self._draw_options()
+        self._draw_strip()
         self._draw_composer()
+        self._draw_menu()
         self._draw_lightbox()
         self._draw_fade()
+        self._draw_tooltip()
         if self.hover_any != self._cursor_hand:
             try:
                 pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND if self.hover_any else pygame.SYSTEM_CURSOR_ARROW)
@@ -1820,14 +1952,14 @@ class ElinApp:
     # ------------------------------------------------------------------ acciones
     def _goto(self, view: str) -> None:
         self.view = view
-        self.opts_open = view != "chat"
+        self.menu = None
         self._set_status({"chat": "Conversación", "create": "Elige un motor y describe tu imagen", "search": "Busca fotos en varias fuentes"}[view])
 
     def _toggle_search(self) -> None:
         self.use_search = not self.use_search
         self._set_status("Búsqueda web activada en el chat" if self.use_search else "Búsqueda web desactivada")
 
-    def _use_chip(self, chip: tuple[str, str, str]) -> None:
+    def _use_chip(self, chip: tuple[str, ...]) -> None:
         self._goto(chip[1])
         self.input_text = chip[2]
 
@@ -1842,6 +1974,7 @@ class ElinApp:
         self._set_status("Nueva conversación iniciada")
 
     def _submit(self) -> None:
+        self.menu = None
         {"chat": self._send_message, "create": self._create_images, "search": self._search_images}[self.view]()
 
     def _quick_create(self) -> None:
@@ -1860,9 +1993,6 @@ class ElinApp:
             self._set_status("Texto copiado al portapapeles")
         except Exception:
             self._set_status("No se pudo acceder al portapapeles", "error")
-
-    def _copy_last(self) -> None:
-        self._copy_text(self.last_answer)
 
     def _paste(self) -> None:
         try:
@@ -2009,7 +2139,6 @@ class ElinApp:
             self._set_status("Escribe una descripción para crear una imagen", "error")
             return
         self.input_text = ""
-        self.opts_open = False
         if self.provider == "auto":
             providers = ["auto"]
         elif self.provider == "compare":
@@ -2114,7 +2243,6 @@ class ElinApp:
             self._set_status("Activa al menos una fuente", "error")
             return
         self.input_text = ""
-        self.opts_open = False
         sid = next(self.search_ids)
         self._add_msg("user", f"Buscar imágenes: {query}", meta=True)
         self.feed.append({"kind": "search", "sid": sid, "query": query, "results": [], "waiting": len(active)})
@@ -2204,14 +2332,14 @@ class ElinApp:
             pass
         self.speaking = False
 
-    def _toggle_speak(self) -> None:
+    def _toggle_speak(self, text: str | None = None) -> None:
         if self.speaking:
             self._stop_audio()
             self._set_status("Lectura detenida")
             return
         if self.speak_loading:
             return
-        text = clean_markdown(self.last_answer).strip()
+        text = clean_markdown(text if text is not None else self.last_answer).strip()
         if not text:
             self._set_status("Todavía no hay una respuesta para leer", "error")
             return
@@ -2412,7 +2540,9 @@ class ElinApp:
             if event.key == pygame.K_F11:
                 self._toggle_maximize()
             elif event.key == pygame.K_ESCAPE:
-                if self.lightbox is not None:
+                if self.menu is not None:
+                    self.menu = None
+                elif self.lightbox is not None:
                     self.lightbox = None
                 else:
                     self.input_text = ""
@@ -2434,6 +2564,7 @@ class ElinApp:
             elif ctrl and event.key == pygame.K_n:
                 self._new_chat()
             elif event.unicode and event.unicode.isprintable() and not ctrl:
+                self.menu = None
                 if len(self.input_text) < MAX_INPUT:
                     self.input_text += event.unicode
 
